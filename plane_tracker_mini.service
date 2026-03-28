@@ -1,0 +1,18 @@
+[Unit]
+Description=PlaneTracker Mini
+After=network-online.target gpsd.service dump1090-json.service
+Wants=network-online.target gpsd.service dump1090-json.service
+
+[Service]
+Type=simple
+User=przemek
+WorkingDirectory=/home/przemek/PlaneTrackerMini
+ExecStart=/home/przemek/PlaneTrackerMini/.venv/bin/python /home/przemek/PlaneTrackerMini/plane_tracker_mini.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=AIRCRAFT_SOURCE=/run/dump1090-mutability/aircraft.json
+Environment=PLANE_TRACKER_RANGE_KM=80
+
+[Install]
+WantedBy=multi-user.target
