@@ -168,6 +168,7 @@ class RadarDisplay:
 
     def _draw_status(self, draw: ImageDraw.ImageDraw, ownship: Optional[Position], count: int, gps_ok: bool, feed_ok: bool) -> None:
         draw.text((8, 6), f"Planes {count:02d}", fill=STATUS)
+        draw.text((248, 6), time.strftime("%H:%M:%S"), fill=TEXT_DIM)
         draw.text((8, 20), "GPS OK" if gps_ok else "GPS WAIT", fill=STATUS if gps_ok else STATUS_BAD)
         draw.text((80, 20), "ADS-B OK" if feed_ok else "ADS-B WAIT", fill=STATUS if feed_ok else STATUS_BAD)
         draw.text((200, 20), f"{int(RANGE_KM)} km", fill=TEXT_DIM)
