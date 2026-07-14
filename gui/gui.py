@@ -15,6 +15,7 @@ import pygame
 SCREEN_WIDTH = int(os.getenv("PLANE_TRACKER_SCREEN_WIDTH", "480"))
 SCREEN_HEIGHT = int(os.getenv("PLANE_TRACKER_SCREEN_HEIGHT", "320"))
 FULLSCREEN = os.getenv("PLANE_TRACKER_FULLSCREEN", "1") != "0"
+ASSET_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 
 GPS_REFRESH_SECONDS = float(os.getenv("PLANE_TRACKER_GPS_REFRESH_SECONDS", "10"))
 AIRCRAFT_REFRESH_SECONDS = float(os.getenv("PLANE_TRACKER_AIRCRAFT_REFRESH_SECONDS", "1"))
@@ -24,7 +25,7 @@ ADSB_STALE_SECONDS = float(os.getenv("PLANE_TRACKER_ADSB_STALE_SECONDS", "60"))
 TRACK_HISTORY_POINTS = max(1, int(os.getenv("PLANE_TRACKER_TRACK_HISTORY_POINTS", "120")))
 TRACK_HISTORY_SECONDS = max(1.0, float(os.getenv("PLANE_TRACKER_TRACK_HISTORY_SECONDS", "600")))
 
-RANGE_STEPS_KM = (5, 10, 20, 40, 80, 160, 320)
+RANGE_STEPS_KM = (5, 10, 20, 40, 80, 160, 320, 640, 1280)
 DEFAULT_RANGE_KM = float(os.getenv("PLANE_TRACKER_RANGE_KM", "80"))
 
 BG = (0, 0, 0)
@@ -88,6 +89,8 @@ class Button:
 class DemoDataSource:
     def __init__(self) -> None:
         self.home = Position(51.4700, -0.4543)
+        self.active_aircraft_count = 5
+        self.adsb_messages_updated = False
 
     def get_position(self) -> Optional[Position]:
         drift_km = (time.monotonic() % 120) * 0.002
@@ -95,6 +98,7 @@ class DemoDataSource:
         return Position(lat, lon)
 
     def get_targets(self, ownship: Optional[Position], range_km: float) -> list[PlaneTarget]:
+        self.adsb_messages_updated = True
         if ownship is None:
             return []
 
@@ -109,8 +113,6 @@ class DemoDataSource:
         ]
 
         for index, (flight, hex_ident, base_dist, bearing, track, altitude, speed, vertical_rate) in enumerate(demo_specs):
-            if base_dist > range_km:
-                continue
             animated_bearing = (bearing + (now * (2 + index)) % 360) % 360
             distance = base_dist
             lat, lon = offset_position(ownship.lat, ownship.lon, distance, animated_bearing)
@@ -188,6 +190,7 @@ class PlaneTrackerTouchUI:
 
         self.data_source = data_source or DemoDataSource()
         self.buttons = self._build_buttons()
+        self.button_images = self._load_button_images()
 
     @property
     def range_km(self) -> float:
@@ -221,6 +224,19 @@ class PlaneTrackerTouchUI:
             Button("labels", pygame.Rect(x + (button_width + gap) * 2, y, button_width, button_height), "toggle_labels", active=True),
             Button("exit", pygame.Rect(x + (button_width + gap) * 3, y, final_button_width, button_height), "exit"),
         ]
+
+    def _load_button_images(self) -> dict[str, pygame.Surface]:
+        filenames = {
+            "zoom_in": "zoom_in.png",
+            "zoom_out": "zoom_out.png",
+            "hide_labels": "hide_labels.png",
+            "show_labels": "show_labels.png",
+            "exit": "off.png",
+        }
+        return {
+            name: pygame.image.load(os.path.join(ASSET_DIR, filename)).convert_alpha()
+            for name, filename in filenames.items()
+        }
 
     def _handle_events(self) -> None:
         for event in pygame.event.get():
@@ -291,10 +307,15 @@ class PlaneTrackerTouchUI:
             try:
                 self.planes = self.data_source.get_targets(self.ownship, self.range_km)
                 self.adsb_connected = True
-                self.last_aircraft_count = len(self.planes)
+                self.last_aircraft_count = int(
+                    getattr(self.data_source, "active_aircraft_count", len(self.planes))
+                )
                 self.adsb_ok = True
                 self._update_track_history(now)
-                self._update_adsb_flash(now)
+                self._update_adsb_flash(
+                    now,
+                    getattr(self.data_source, "adsb_messages_updated", None),
+                )
                 if self.manual_selection_ident is not None:
                     self.selected = next(
                         (plane for plane in self.planes if plane.hex_ident == self.manual_selection_ident),
@@ -309,16 +330,18 @@ class PlaneTrackerTouchUI:
 
         self._update_connection_status(now)
 
-    def _update_adsb_flash(self, now: float) -> None:
+    def _update_adsb_flash(self, now: float, feed_updated: Optional[bool] = None) -> None:
         current_counts = {
             plane.hex_ident: plane.messages
             for plane in self.planes
             if plane.messages is not None
         }
-        if any(
+        targets_updated = any(
             ident not in self.last_message_counts or count > self.last_message_counts[ident]
             for ident, count in current_counts.items()
-        ):
+        )
+        messages_updated = feed_updated if feed_updated is not None else targets_updated
+        if messages_updated:
             self.last_adsb_message_update = now
             self.adsb_flash_until = now + STATUS_FLASH_SECONDS
         self.last_message_counts = current_counts
@@ -377,7 +400,7 @@ class PlaneTrackerTouchUI:
         ring_count = 6
         ring_labels: list[tuple[str, tuple[int, int]]] = []
         label_angle = math.radians(50)
-        for ring_index in range(1, ring_count + 1):
+        for ring_index in range(1, ring_count):
             fraction = ring_index / ring_count
             radius = int(radius_max * fraction)
             color = GRID if ring_index == ring_count else GRID_DIM
@@ -389,10 +412,9 @@ class PlaneTrackerTouchUI:
             label_y = center[1] - int(radius * math.sin(label_angle)) - 5
             if ring_index < ring_count:
                 ring_labels.append((format_ring_distance(distance_km), (label_x, label_y)))
-        pygame.draw.line(self.screen, GRID_DIM, (center[0], self.radar_rect.y + 8), (center[0], self.radar_rect.bottom - 8), 1)
+        pygame.draw.line(self.screen, GRID_DIM, (center[0], self.radar_rect.y + 12), (center[0], self.radar_rect.bottom - 8), 1)
         pygame.draw.line(self.screen, GRID_DIM, (self.radar_rect.x + 8, center[1]), (self.radar_rect.right - 8, center[1]), 1)
-        pygame.draw.line(self.screen, GRID_DIM, (center[0] - 6, self.radar_rect.y + 8), (center[0] + 6, self.radar_rect.y + 8), 1)
-        draw_text_fit(self.screen, self.font_xs, "N", (center[0] - 3, self.radar_rect.y + 10), 12, TEXT_DIM)
+        draw_text_fit(self.screen, self.font_xs, "N", (center[0] - 1.5, self.radar_rect.y + 2), 12, TEXT_DIM)
 
         for label, position in ring_labels:
             label_surface = self.font_xs.render(label, True, TEXT_DIM)
@@ -412,7 +434,7 @@ class PlaneTrackerTouchUI:
                 self._draw_plane(plane, point)
 
         if self.ownship is None:
-            text = self.font_sm.render("NO GPS FIX", True, AMBER)
+            text = self.font_sm.render("NO GPS!", True, AMBER)
             self.screen.blit(text, text.get_rect(center=(center[0], center[1] + 28)))
 
     def _draw_track_history(self) -> None:
@@ -537,30 +559,14 @@ class PlaneTrackerTouchUI:
         draw_text_fit(self.screen, self.font_xs, right_value, (x + 70, y + 9), 58, TEXT)
 
     def _draw_button(self, button: Button) -> None:
-        fill = (7, 42, 37) if button.active else PANEL_2
-        if button.action == "exit":
-            fill = (48, 12, 12)
-        pygame.draw.rect(self.screen, fill, button.rect)
-        pygame.draw.rect(self.screen, GREEN if button.active else LINE, button.rect, 1)
-        self._draw_button_icon(button)
-
-    def _draw_button_icon(self, button: Button) -> None:
-        color = (255, 170, 170) if button.action == "exit" else TEXT
-        cx, cy = button.rect.center
-        if button.action == "zoom_in":
-            pygame.draw.line(self.screen, color, (cx - 7, cy), (cx + 7, cy), 2)
-            pygame.draw.line(self.screen, color, (cx, cy - 7), (cx, cy + 7), 2)
-        elif button.action == "zoom_out":
-            pygame.draw.line(self.screen, color, (cx - 7, cy), (cx + 7, cy), 2)
-        elif button.action == "toggle_labels":
-            pygame.draw.ellipse(self.screen, color, (cx - 11, cy - 6, 22, 12), 1)
-            pygame.draw.circle(self.screen, color, (cx, cy), 2)
-            if not self.show_labels:
-                pygame.draw.line(self.screen, color, (cx - 9, cy + 8), (cx + 9, cy - 8), 2)
-        elif button.action == "exit":
-            pygame.draw.circle(self.screen, color, (cx, cy), 8, 2)
-            pygame.draw.rect(self.screen, (48, 12, 12), (cx - 3, cy - 10, 6, 7))
-            pygame.draw.line(self.screen, color, (cx, cy - 10), (cx, cy), 2)
+        image_name = button.action
+        if button.action == "toggle_labels":
+            image_name = "hide_labels" if self.show_labels else "show_labels"
+        image = self.button_images[image_name]
+        max_size = (min(image.get_width(), button.rect.width), min(image.get_height(), button.rect.height))
+        if image.get_size() != max_size:
+            image = pygame.transform.smoothscale(image, max_size)
+        self.screen.blit(image, image.get_rect(center=button.rect.center))
 
 
 def draw_text_fit(

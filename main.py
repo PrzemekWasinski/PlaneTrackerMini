@@ -88,6 +88,9 @@ class GPSDClient:
 class AircraftFeed:
     def __init__(self, source: str) -> None:
         self.source = source
+        self.active_aircraft_count = 0
+        self.adsb_messages_updated = False
+        self._message_counts: dict[str, int] = {}
 
     def _load_payload(self) -> dict:
         if self.source.startswith(("http://", "https://")):
@@ -101,8 +104,22 @@ class AircraftFeed:
     def get_targets(self, ownship: Optional[Position], range_km: float) -> list[PlaneTarget]:
         payload = self._load_payload()
         targets: list[PlaneTarget] = []
+        aircraft_records = payload.get("aircraft", [])
+        if not isinstance(aircraft_records, list):
+            aircraft_records = []
+        self.active_aircraft_count = len(aircraft_records)
+        message_counts = {
+            str(aircraft.get("hex", index)): count
+            for index, aircraft in enumerate(aircraft_records)
+            if (count := optional_int(aircraft.get("messages"))) is not None
+        }
+        self.adsb_messages_updated = any(
+            ident not in self._message_counts or count != self._message_counts[ident]
+            for ident, count in message_counts.items()
+        )
+        self._message_counts = message_counts
 
-        for aircraft in payload.get("aircraft", []):
+        for aircraft in aircraft_records:
             lat = aircraft.get("lat")
             lon = aircraft.get("lon")
             if lat is None or lon is None:
@@ -126,8 +143,6 @@ class AircraftFeed:
             else:
                 distance_km = calculate_distance_km(ownship.lat, ownship.lon, lat_f, lon_f)
                 bearing_deg = calculate_bearing_deg(ownship.lat, ownship.lon, lat_f, lon_f)
-                if distance_km > range_km:
-                    continue
 
             targets.append(
                 PlaneTarget(
@@ -181,6 +196,14 @@ class ProductionDataSource:
         except (OSError, ConnectionError, json.JSONDecodeError):
             self.gps.close()
             raise OSError("GPS unavailable")
+
+    @property
+    def active_aircraft_count(self) -> int:
+        return self.feed.active_aircraft_count
+
+    @property
+    def adsb_messages_updated(self) -> bool:
+        return self.feed.adsb_messages_updated
 
     def get_targets(self, ownship: Optional[Position], range_km: float) -> list[PlaneTarget]:
         try:
