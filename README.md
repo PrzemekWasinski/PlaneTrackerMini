@@ -6,8 +6,7 @@ Because Plane Tracker Mini is a portable device, the home coordinates cannot be 
 
 # Current Design
 
-<img width="4032" height="3024" alt="20260719_005502" src="https://github.com/user-attachments/assets/ff39b5ee-a872-4d67-99ad-59423624b3a2" />
-
+<img width="4032" height="3024" alt="planetrackermini-image(1)" src="https://github.com/user-attachments/assets/bcd1a378-efc5-4766-80ab-c3e29a773cc0" />
 
 The current design features a Raspberry Pi 3, Elegoo 3 Inch Touchscreen, Nooelec NESDR RTL-SDR and a Mini 1090Mhz antenna. The program is written in `Python` and `readsb` runs in the background for decoding ADS-B signals.
 
